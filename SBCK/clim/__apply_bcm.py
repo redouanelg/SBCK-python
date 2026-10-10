@@ -197,6 +197,12 @@ def apply_bcm( Y0: xr.DataArray, X0: xr.DataArray, X1: xr.DataArray,
             raise ValueError(f"Dimension '{d}' of multivariate_dims is not in Y0, X0 and X1")
     if time_dim in multivariate_dims:
         raise ValueError("Time dimension '{time_dim}' can not be in multivariate_dims argument")
+    
+    ## Dask-backed inputs are loaded in memory: the outputs are filled with
+    ## .loc, which is not possible with dask arrays
+    Y0 = Y0.compute()
+    X0 = X0.compute()
+    X1 = X1.compute()
 
     ## Create output
     Z1 = X1.copy() + np.nan
@@ -418,6 +424,11 @@ def apply_bcm_along_time( Y: xr.DataArray, X: xr.DataArray,
             raise ValueError(f"Dimension '{d}' of multivariate_dims is not in X")
     if time_dim in multivariate_dims:
         raise ValueError("Time dimension '{time_dim}' can not be in multivariate_dims argument")
+    
+    ## Dask-backed inputs are loaded in memory: the output is filled with .loc,
+    ## which is not possible with dask arrays
+    Y = Y.compute()
+    X = X.compute()
 
     ## Create output
     Z = X.copy() + np.nan
