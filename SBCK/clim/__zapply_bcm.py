@@ -322,7 +322,7 @@ def zapply_bcm_along_time( Y: zr.ZXArray, X: zr.ZXArray,
         for w in projection_window:
             if not isinstance( w , int ):
                 raise ValueError
-        wl,wm,wr = projection_window
+        pwl,pwm,pwr = projection_window
     except Exception as e:
         raise ValueError(f"Incoherent projection_window '{projection_window}' {e}")
     
@@ -418,7 +418,7 @@ def zapply_bcm_along_time( Y: zr.ZXArray, X: zr.ZXArray,
             continue
 
         ## Loop on years
-        for tf0,tp0,tp1,tf1 in yearly_window( prj0 , prj1 , wl , wm , wr , bleft , bright ):
+        for tf0,tp0,tp1,tf1 in yearly_window( prj0 , prj1 , pwl , pwm , pwr , bleft , bright ):
             
             ## Sub-time axis for the projection period
             _timeX1fs = timeX1fs.sel( { time_dim : slice(str(tf0),str(tf1)) } ).sortby(time_dim)
