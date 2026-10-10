@@ -96,6 +96,8 @@ class OTC(AbstractBC):##{{{
         super().__init__( "OTC" , "S" )
         self.muX = None
         self.muY = None
+        self._bin_width  = bin_width
+        self._bin_origin = bin_origin
         self.bin_width  = bin_width
         self.bin_origin = bin_origin
         self._plan       = None
@@ -113,9 +115,9 @@ class OTC(AbstractBC):##{{{
             Biased model in calibration period
         """
         
-        ## Sparse Histogram
-        self.bin_width  = np.array( [self.bin_width ] ).ravel() if self.bin_width  is not None else bin_width_estimator( Y0 , X0 )
-        self.bin_origin = np.array( [self.bin_origin] ).ravel() if self.bin_origin is not None else np.zeros( self.bin_width.size )
+        ## Sparse Histogram (bin_width / bin_origin not given are estimated at each fit)
+        self.bin_width  = np.array( [self._bin_width ] ).ravel() if self._bin_width  is not None else bin_width_estimator( Y0 , X0 )
+        self.bin_origin = np.array( [self._bin_origin] ).ravel() if self._bin_origin is not None else np.zeros( self.bin_width.size )
         
         self.bin_width  = np.array( [self.bin_width] ).ravel()
         self.bin_origin = np.array( [self.bin_origin] ).ravel()
@@ -246,7 +248,9 @@ class dOTC(AbstractBC):##{{{
                 self._cov_factor = np.array([cov_factor])
             except Exception:
                 raise ValueError("cov_factor not a string and not castable to numpy array")
+        self._cov_factor_given = self._cov_factor
         
+        self._bin_width = bin_width
         self.bin_width  = bin_width
         self.bin_origin = bin_origin
         self._otcX0Y0   = None
@@ -277,6 +281,8 @@ class dOTC(AbstractBC):##{{{
         if X0.ndim == 1: X0 = X0.reshape(-1,1)
         if X1.ndim == 1: X1 = X1.reshape(-1,1)
         
+        ## cov_factor / bin_width not given are estimated at each fit
+        self._cov_factor = self._cov_factor_given
         if self._cov_factor is None:
             if self._cov_factor_str in ["std","sqrtm","cholesky"]:
                 if Y0.shape[1] == 1:
@@ -297,7 +303,7 @@ class dOTC(AbstractBC):##{{{
             else:
                 self._cov_factor = np.identity(Y0.shape[1])
         self._cov_factor = self._cov_factor.reshape(self.ndim,self.ndim)
-        self.bin_width = self.bin_width if self.bin_width is not None else bin_width_estimator( Y0 , X0 , X1 )
+        self.bin_width = self._bin_width if self._bin_width is not None else bin_width_estimator( Y0 , X0 , X1 )
         
         
         ## Optimal plan

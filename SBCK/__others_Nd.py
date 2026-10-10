@@ -185,6 +185,7 @@ class MBCn(AbstractBC):##{{{
         
         n_features = Y0.shape[1]
         self.iter_stop.initialize()
+        self._lbc = []
         
         ## Generate orthogonal matrices: SO(n_features)
         self.ortho_mat  = sc.special_ortho_group.rvs( n_features , self.maxit )
