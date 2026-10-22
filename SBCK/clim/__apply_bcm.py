@@ -25,6 +25,7 @@ import itertools as itt
 import logging
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from ..__AbstractBC import AbstractBC
@@ -55,6 +56,48 @@ def group2time( time: xr.DataArray, time_dim: str, grps: Sequence[Any], grp_name
     return xr.concat( [ time.groupby(f"{time_dim}.{grp_name}")[g] for g in grps ], dim = time_dim ).sortby(time_dim).compute()
 ##}}}
 
+## Diagnostic flags ##{{{
+
+def _flag_names( bcm: Any ) -> tuple[str,...]:
+    """Names of the diagnostic flags (attribute 'flag_names') of a method, of its pipe and of its bc_method"""
+    names = list(getattr( bcm , "flag_names" , () ))
+    for c in list(getattr( bcm , "_pipe" , [] )) + [ getattr( bcm , "_bc_method" , None ) ]:
+        if c is not None:
+            names += [ n for n in _flag_names(c) if n not in names ]
+    return tuple(names)
+
+def _get_flags( bcm: Any ) -> dict[str,np.ndarray]:
+    """Diagnostic flags of the last predict (attribute 'flags') of a method, of its pipe and of its bc_method;
+    flags with the same name are combined with OR"""
+    flags = {}
+    for i,c in enumerate( [bcm] + list(getattr( bcm , "_pipe" , [] )) + [ getattr( bcm , "_bc_method" , None ) ] ):
+        if c is None:
+            continue
+        for n,v in ( getattr( c , "flags" , {} ) if i == 0 else _get_flags(c) ).items():
+            flags[n] = v if n not in flags else np.logical_or( flags[n] , v )
+    return flags
+
+def _flags_collect( F1: xr.DataArray , flag_names: Sequence[str] , sdims: Sequence[str] , multivariate_dims: Sequence[str] , info: dict[str,Any] , where: str ) -> pd.DataFrame:
+    """Flagged entries of one group (and window), one row per flagged cell (and column); log the number of flagged cells"""
+    F1  = F1.assign_coords( flag = list(flag_names) ).transpose( *sdims , "flag" , *multivariate_dims )
+    v   = np.nan_to_num( np.asarray(F1.values) ) > 0
+    nf  = F1["flag"].size
+    cnt = ( v.any( axis = tuple(range( len(sdims) + 1 , v.ndim )) ) if len(multivariate_dims) > 0 else v ).reshape(-1,nf).sum(0)
+    for n,c in zip( F1["flag"].values , cnt ):
+        if c > 0:
+            logger.warning( f"{n}: {int(c)} cell(s) flagged ({where})" )
+    idx  = np.nonzero(v)
+    vals = { d: np.asarray(F1[d].values)[i] for d,i in zip(F1.dims,idx) }
+    return pd.DataFrame( { **{ d: vals[d] for d in sdims } , **{ k: np.full( idx[0].size , val ) for k,val in info.items() } ,
+                           "flag": vals["flag"] , **{ d: vals[d] for d in multivariate_dims } } )
+
+def _flags_table( parts: list[pd.DataFrame] , columns: Sequence[str] ) -> pd.DataFrame:
+    """Table of all the flagged entries"""
+    parts = [ p for p in parts if len(p) > 0 ]
+    return pd.concat( parts , ignore_index = True ) if len(parts) > 0 else pd.DataFrame( columns = list(columns) )
+
+##}}}
+
 
 ## _apply_bcm ##{{{
 
@@ -62,18 +105,23 @@ def _apply_bcm( Y0: np.ndarray , X0f: np.ndarray , X1f: np.ndarray,
                                  X0p: np.ndarray , X1p: np.ndarray,
                bc_method: AbstractBC,
                bc_method_kwargs: dict[str,Any] = {},
-               n_multivariate_dims: int = 0 ) -> np.ndarray:
+               n_multivariate_dims: int = 0,
+               flag_names: tuple[str,...] = () ) -> tuple[np.ndarray,...]:
     
     ## Create output
     Z0p = X0p.copy() + np.nan
     Z1p = X1p.copy() + np.nan
-
-    ## Special case
-    if Z1p.size == 1:
-        return Z1p,Z0p
     
     ## Find uni and multi-axis
     tdim  = Y0.ndim - 1 - n_multivariate_dims
+    
+    ## Diagnostic flags of the method (one per flag name and column)
+    if len(flag_names) > 0:
+        F1p = np.zeros( X1p.shape[:tdim] + (len(flag_names),) + X1p.shape[tdim+1:] , dtype = np.int8 )
+    
+    ## Special case
+    if Z1p.size == 1:
+        return (Z1p,Z0p,F1p) if len(flag_names) > 0 else (Z1p,Z0p)
     
     ## Loop
     for pidx in itt.product(*[range(s) for s in Y0.shape[:tdim]]):
@@ -85,10 +133,18 @@ def _apply_bcm( Y0: np.ndarray , X0f: np.ndarray , X1f: np.ndarray,
                 np.isfinite(X0p[idx]).all() and
                 np.isfinite(X1p[idx]).all()):
             continue
-        _Z1p,_Z0p = bc_method( **bc_method_kwargs ).fit( Y0[idx] , X0f[idx] , X1f[idx] ).predict( X1p[idx], X0p[idx] )
+        bcm       = bc_method( **bc_method_kwargs ).fit( Y0[idx] , X0f[idx] , X1f[idx] )
+        _Z1p,_Z0p = bcm.predict( X1p[idx], X0p[idx] )
         Z1p[idx]  = _Z1p.reshape(*shp)
         Z0p[idx]  = _Z0p.reshape(*shp)
+        if len(flag_names) > 0:
+            flags = _get_flags(bcm)
+            for i,n in enumerate(flag_names):
+                if n in flags:
+                    F1p[pidx + (i,)] = np.asarray(flags[n]).reshape(X1p.shape[tdim+1:])
     
+    if len(flag_names) > 0:
+        return Z1p,Z0p,F1p
     return Z1p,Z0p
 
 ##}}}
@@ -103,11 +159,21 @@ def apply_bcm( Y0: xr.DataArray, X0: xr.DataArray, X1: xr.DataArray,
               multivariate_dims: Sequence | str = tuple(),
               chunks: dict[str,int | str] | None = None,
               bc_method_kwargs: dict[str,Any] = {},
+              return_flags: bool = False,
               **kwargs: Any
-              ) -> xr.DataArray:
+              ) -> tuple[xr.DataArray,...]:
     """Function for correcting `X0` and `X1` biased data with the `Y0`
     reference. The `bcm` method is used, and must be a non-stationary method.
     The firs dimension must be the time axis.
+    
+    If the method sets diagnostic flags (attributes `flag_names` / `flags`,
+    e.g. SBCK.ppp.LimitTailsRatio), they are read for each cell and group:
+    the number of flagged cells is logged (warning, SBCK.clim logger, visible
+    if logging is configured) for each group, and, with `return_flags = True`,
+    the flagged entries are returned after Z0 as a pandas.DataFrame, one row per
+    flagged cell (and column of the multivariate dimensions): coordinates of
+    the cell, 'group' (index from 1: the month for seas_cycle = "month")
+    and 'flag'. F is None if the method sets no flag.
     
     Arguments
     ---------
@@ -146,6 +212,8 @@ def apply_bcm( Y0: xr.DataArray, X0: xr.DataArray, X1: xr.DataArray,
         Corrected data in projection period
     Z0: xarray.DataArray
         Corrected data in calibration period
+    F: pandas.DataFrame | None
+        Only if return_flags: flagged entries
     """
     ## Check if time axis is in dimensions of Y and X
     if time_dim not in Y0.dims:
@@ -206,6 +274,13 @@ def apply_bcm( Y0: xr.DataArray, X0: xr.DataArray, X1: xr.DataArray,
     input_core_dims  = [(tdim,) + multivariate_dims for tdim in [f"{time_dim}Y0",f"{time_dim}X0f",f"{time_dim}X1f",f"{time_dim}X0p",f"{time_dim}X1p"] ]
     output_core_dims = [(f"{time_dim}X1p",) + multivariate_dims,(f"{time_dim}X0p",) + multivariate_dims]
     
+    ## Diagnostic flags of the method
+    flag_names = _flag_names( bc_method( **bc_method_kwargs ) )
+    fkwargs    = {}
+    if len(flag_names) > 0:
+        output_core_dims.append( ("flag",) + multivariate_dims )
+        fkwargs = { "output_dtypes": [X1.dtype,X0.dtype,np.int8] , "dask_gufunc_kwargs": { "output_sizes": { "flag": len(flag_names) } } }
+    
     ## Chunks
     if chunks is None:
         chunks = { d: "auto" for d in Y0.dims if d not in input_core_dims[0] + ("time",) }
@@ -213,6 +288,10 @@ def apply_bcm( Y0: xr.DataArray, X0: xr.DataArray, X1: xr.DataArray,
     ## Loop on groups
     _fmt  = '0>{}'.format( int(np.log10(len(groupsY))+1) )
     _ngrp = len(groupsY)
+    F     = None
+    if len(flag_names) > 0:
+        sdims = [ d for d in X1.dims if d != time_dim and d not in multivariate_dims ]
+        F     = []
     for igrps,(grpsXf,grpsXp,grpsY) in enumerate(zip(groupsXf,groupsXp,groupsY)):
         
         logger.info( f"Correction of group {igrps+1:{_fmt}} / {_ngrp}" )
@@ -236,16 +315,23 @@ def apply_bcm( Y0: xr.DataArray, X0: xr.DataArray, X1: xr.DataArray,
                           input_core_dims  = input_core_dims,
                           output_core_dims = output_core_dims,
                           dask = "parallelized",
-                          kwargs = { "bc_method": bc_method , "bc_method_kwargs": bc_method_kwargs , "n_multivariate_dims": len(multivariate_dims) },
+                          kwargs = { "bc_method": bc_method , "bc_method_kwargs": bc_method_kwargs , "n_multivariate_dims": len(multivariate_dims) , "flag_names": flag_names },
+                          **fkwargs
                           )
-        res = xr.Dataset( { "Z1s": res[0], "Z0s": res[1] } ).compute()
+        res = xr.Dataset( { "Z1s": res[0], "Z0s": res[1] , **( { "F1s": res[2] } if len(flag_names) > 0 else {} ) } ).compute()
         
         ## Store correction
         Z1s = res.Z1s.rename( { f"{time_dim}X1p": time_dim } ).transpose(*X1.dims)
         Z0s = res.Z0s.rename( { f"{time_dim}X0p": time_dim } ).transpose(*X0.dims)
         Z1.loc[Z1s.coords] = Z1s
         Z0.loc[Z0s.coords] = Z0s
-
+        if len(flag_names) > 0:
+            F.append( _flags_collect( res.F1s , flag_names , sdims , multivariate_dims , { "group": igrps + 1 } , f"group {igrps+1:{_fmt}} / {_ngrp}" ) )
+    
+    if F is not None:
+        F = _flags_table( F , sdims + ["group","flag"] + list(multivariate_dims) )
+    if return_flags:
+        return Z1,Z0,F
     return Z1,Z0
 
 ##}}}
@@ -256,20 +342,25 @@ def apply_bcm( Y0: xr.DataArray, X0: xr.DataArray, X1: xr.DataArray,
 def _apply_bcm_along_time( Y0: np.ndarray , X0: np.ndarray , X1f: np.ndarray , X1p: np.ndarray ,
                bc_method: AbstractBC,
                bc_method_kwargs: dict[str,Any] = {},
-               n_multivariate_dims: int = 0 ) -> np.ndarray:
+               n_multivariate_dims: int = 0,
+               flag_names: tuple[str,...] = () ) -> np.ndarray | tuple[np.ndarray,np.ndarray]:
     
     ## Create output
     Z1p = X1p.copy() + np.nan
-
-    ## Special case
-    if Z1p.size == 1:
-        return Z1p
-    
-#    ## For dev
-#    print( f"{Y0.shape} / {X0.shape} / {X1f.shape} / {X1p.shape} / {n_multivariate_dims}" )
     
     ## Find uni and multi-axis
     tdim  = Y0.ndim - 1 - n_multivariate_dims
+    
+    ## Diagnostic flags of the method (one per flag name and column)
+    if len(flag_names) > 0:
+        F1p = np.zeros( X1p.shape[:tdim] + (len(flag_names),) + X1p.shape[tdim+1:] , dtype = np.int8 )
+    
+    ## Special case
+    if Z1p.size == 1:
+        return (Z1p,F1p) if len(flag_names) > 0 else Z1p
+    
+#    ## For dev
+#    print( f"{Y0.shape} / {X0.shape} / {X1f.shape} / {X1p.shape} / {n_multivariate_dims}" )
     
     ## Loop
     for pidx in itt.product(*[range(s) for s in Y0.shape[:tdim]]):
@@ -277,8 +368,16 @@ def _apply_bcm_along_time( Y0: np.ndarray , X0: np.ndarray , X1f: np.ndarray , X
         shp = [1 for _ in range(len(pidx))] + [-1] + [Y0.shape[s+tdim+1] for s in range(n_multivariate_dims)]
         if not (np.isfinite(Y0[idx]).all() and np.isfinite(X0[idx]).all() and np.isfinite(X1f[idx]).all() and np.isfinite(X1p[idx]).all()):
             continue
-        Z1p[idx] = bc_method( **bc_method_kwargs ).fit( Y0[idx] , X0[idx] , X1f[idx] ).predict( X1p[idx] ).reshape(*shp)
+        bcm      = bc_method( **bc_method_kwargs ).fit( Y0[idx] , X0[idx] , X1f[idx] )
+        Z1p[idx] = bcm.predict( X1p[idx] ).reshape(*shp)
+        if len(flag_names) > 0:
+            flags = _get_flags(bcm)
+            for i,n in enumerate(flag_names):
+                if n in flags:
+                    F1p[pidx + (i,)] = np.asarray(flags[n]).reshape(X1p.shape[tdim+1:])
     
+    if len(flag_names) > 0:
+        return Z1p,F1p
     return Z1p
 
 ##}}}
@@ -296,11 +395,21 @@ def apply_bcm_along_time( Y: xr.DataArray, X: xr.DataArray,
               multivariate_dims: Sequence | str = tuple(),
               chunks: dict[str,int | str] | None = None,
               bc_method_kwargs: dict[str,Any] = {},
+              return_flags: bool = False,
               **kwargs: Any
-              ) -> xr.DataArray:
+              ) -> xr.DataArray | tuple[xr.DataArray,xr.DataArray | None]:
     """Function for correcting `X` biased data with the `Y` reference. The
     `bcm` method is used, and must be a non-stationary method. The first
     dimension must be the time axis.
+    
+    If the method sets diagnostic flags (attributes `flag_names` / `flags`,
+    e.g. SBCK.ppp.LimitTailsRatio), they are read for each cell and group and window:
+    the number of flagged cells is logged (warning, SBCK.clim logger, visible
+    if logging is configured) for each group and window, and, with `return_flags = True`,
+    the flagged entries are returned with the correction as a pandas.DataFrame, one row per
+    flagged cell (and column of the multivariate dimensions): coordinates of
+    the cell, 'group' (index from 1: the month for seas_cycle = "month"), 'window'
+    and 'flag'. F is None if the method sets no flag.
     
     Arguments
     ---------
@@ -343,6 +452,8 @@ def apply_bcm_along_time( Y: xr.DataArray, X: xr.DataArray,
     -------
     Z: xarray.DataArray
         Corrected data
+    F: pandas.DataFrame | None
+        Only if return_flags: flagged entries
     """
     ## Check if time axis is in dimensions of Y and X
     if time_dim not in Y.dims:
@@ -426,6 +537,13 @@ def apply_bcm_along_time( Y: xr.DataArray, X: xr.DataArray,
     input_core_dims  = [(tdim,) + multivariate_dims for tdim in [f"{time_dim}Y0",f"{time_dim}X0",f"{time_dim}X1f",f"{time_dim}X1p"] ]
     output_core_dims = [(f"{time_dim}X1p",) + multivariate_dims]
     
+    ## Diagnostic flags of the method
+    flag_names = _flag_names( bc_method( **bc_method_kwargs ) )
+    fkwargs    = {}
+    if len(flag_names) > 0:
+        output_core_dims.append( ("flag",) + multivariate_dims )
+        fkwargs = { "output_dtypes": [X.dtype,np.int8] , "dask_gufunc_kwargs": { "output_sizes": { "flag": len(flag_names) } } }
+    
     ## Chunks
     if chunks is None:
         chunks = { d: "auto" for d in Y.dims if d not in input_core_dims[0] + ("time",) }
@@ -438,6 +556,10 @@ def apply_bcm_along_time( Y: xr.DataArray, X: xr.DataArray,
     ## Loop on groups
     _fmt  = '0>{}'.format( int(np.log10(len(groupsY))+1) )
     _ngrp = len(groupsY)
+    F     = None
+    if len(flag_names) > 0:
+        sdims = [ d for d in X.dims if d != time_dim and d not in multivariate_dims ]
+        F     = []
     for igrps,(grpsXf,grpsXp,grpsY) in enumerate(zip(groupsXf,groupsXp,groupsY)):
         
         logger.info( f"Correction of group {igrps+1:{_fmt}} / {_ngrp}" )
@@ -476,19 +598,30 @@ def apply_bcm_along_time( Y: xr.DataArray, X: xr.DataArray,
                 continue
             
             ## Correction
-            Z1ps = xr.apply_ufunc( _apply_bcm_along_time, Y0s.chunk(chunks) , X0s.chunk(chunks) , X1fs.chunk(chunks) , X1ps.chunk(chunks) ,
+            res = xr.apply_ufunc( _apply_bcm_along_time, Y0s.chunk(chunks) , X0s.chunk(chunks) , X1fs.chunk(chunks) , X1ps.chunk(chunks) ,
                                   input_core_dims  = input_core_dims,
                                   output_core_dims = output_core_dims,
                                   dask = "parallelized",
-                                  kwargs = { "bc_method": bc_method , "bc_method_kwargs": bc_method_kwargs , "n_multivariate_dims": len(multivariate_dims) },
-                                  ).rename( { f"{time_dim}X1p" : time_dim } ).transpose(*X.dims).compute()
+                                  kwargs = { "bc_method": bc_method , "bc_method_kwargs": bc_method_kwargs , "n_multivariate_dims": len(multivariate_dims) , "flag_names": flag_names },
+                                  **fkwargs
+                                  )
+            if len(flag_names) > 0:
+                res  = xr.Dataset( { "Z1ps": res[0] , "F1ps": res[1] } ).compute()
+                Z1ps = res.Z1ps.rename( { f"{time_dim}X1p" : time_dim } ).transpose(*X.dims)
+                F.append( _flags_collect( res.F1ps , flag_names , sdims , multivariate_dims , { "group": igrps + 1 , "window": f"{tp0}-{tp1}" } , f"group {igrps+1:{_fmt}} / {_ngrp}, window {tp0}-{tp1}" ) )
+            else:
+                Z1ps = res.rename( { f"{time_dim}X1p" : time_dim } ).transpose(*X.dims).compute()
             
             ## Store correction
             Z.loc[Z1ps.coords] = Z1ps
     
     ## Final sub-selection
     Z = Z.sel( { time_dim : slice(str(prj0),str(prj1)) } )
-
+    
+    if F is not None:
+        F = _flags_table( F , sdims + ["group","window","flag"] + list(multivariate_dims) )
+    if return_flags:
+        return Z,F
     return Z
 
 ##}}}

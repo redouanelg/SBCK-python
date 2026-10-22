@@ -48,9 +48,17 @@ class LimitTailsRatio(PrePostProcessingPerCols):##{{{
     If the max is greater than this estimation, the tail beyond the quantile 95%
     is rescaled to the interval [Q95%,estimated max].
     
+    Diagnostic flags (`flags`, after predict; one value per column):
+    'LimitTailsRatio.bound_inside_right' (left) is set where the right (left)
+    tail is rescaled although the estimated max (min) is not beyond the
+    quantile 95% (5%) of the correction: the rescaling then inverts the order of
+    the tail values or, with values tied at the max (min), returns NaN.
+    
     """
     
     ## Attributes ##{{{
+    flag_names: tuple[str,...] = ( "LimitTailsRatio.bound_inside_right" , "LimitTailsRatio.bound_inside_left" )
+    flags: dict[str,_Array]
     _ratio: float
     _tails: str
     _norm: str
@@ -111,6 +119,8 @@ class LimitTailsRatio(PrePostProcessingPerCols):##{{{
         self._p_l   = p_l
         self._p_c   = p_c
         
+        self.flags  = {}
+        
     ##}}}
     
     def transform( self , X: _Array ) -> _Array:##{{{
@@ -143,6 +153,10 @@ class LimitTailsRatio(PrePostProcessingPerCols):##{{{
             ratio = 1
             if self._norm == "dynamical":
                 ratio = self._stdY0 / self._stdX0
+            
+            cols   = np.zeros( Xt.shape[1] , dtype = bool )
+            cols[self.cols] = True
+            inside = { "right" : np.zeros( Xt.shape[1] , dtype = bool ) , "left" : np.zeros( Xt.shape[1] , dtype = bool ) }
 
             ## Right tail
             if self._tails in ["right","both"]:
@@ -150,6 +164,7 @@ class LimitTailsRatio(PrePostProcessingPerCols):##{{{
                 SR  = np.where( SR > self._ratio , self._ratio , SR ) * ( self._maxY0 - self._qcY0 ) + self._qcY0 + (self._qcX1 - self._qcX0) * ratio
                 MR  = Xt.max( axis = 0 )
                 QR  = np.quantile( Xt , self._p_r , axis = 0 )
+                inside["right"] = ~(MR < SR) & ~(QR < SR) & cols
                 Xt = np.where( (MR < SR) | (Xt < QR) , Xt , (Xt - QR) / (MR - QR) * (SR - QR) + QR )
                 X[:,self.cols] = Xt[:,self.cols]
             
@@ -159,8 +174,11 @@ class LimitTailsRatio(PrePostProcessingPerCols):##{{{
                 SL  = np.where( SL > self._ratio , self._ratio , SL ) * ( self._minY0 - self._qcY0) + self._qcY0 + (self._qcX1 - self._qcX0) * ratio
                 ML  = Xt.min( axis = 0 )
                 QL  = np.quantile( Xt , self._p_l , axis = 0 )
+                inside["left"] = ~(ML > SL) & ~(QL > SL) & cols
                 Xt = np.where( (ML > SL) | (Xt > QL) , Xt , (Xt - QL) / (ML - QL) * (SL - QL) + QL )
                 X[:,self.cols] = Xt[:,self.cols]
+            
+            self.flags = { n : inside[s] for n,s in zip(self.flag_names,("right","left")) }
             
         return X
     ##}}}
