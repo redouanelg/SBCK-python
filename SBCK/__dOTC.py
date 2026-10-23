@@ -459,7 +459,7 @@ class Univariate_dOTC1d(UnivariateBC):##{{{
         if X1 is None:
             return None
         if reinfer_X1:
-            Z1 = QM( rvY0 = self._planX1Y1._rvY0 ).fit(None,X1).predict(X1)
+            Z1 = QM( rvY0 = self._planX1Y1.ubcm[0].rvY0 ).fit(None,X1).predict(X1)
         else:
             Z1 = self._planX1Y1.predict(X1)
         return Z1
@@ -482,7 +482,7 @@ class Univariate_dOTC1d(UnivariateBC):##{{{
         if X0 is None:
             return None
         if reinfer_X0:
-            Z0 = QM( rvY0 = self._planX0Y0._rvY0 ).fit(None,X0).predict(X0)
+            Z0 = QM( rvY0 = self._planX0Y0.ubcm[0].rvY0 ).fit(None,X0).predict(X0)
         else:
             Z0 = self._planX0Y0.predict(X0)
         return Z0
