@@ -615,11 +615,14 @@ class rv_empirical_gpd(rv_empirical):##{{{
         rvXm = rv_empirical.fit(Xm)
         
         def gpdfit(X):
-            lmom  = sc.lmoment( X , order = [1,2] )
+            lmom  = sc.lmoment( X , order = [1,2] ) if X.size > 1 else np.full( 2 , np.nan )
             itau  = lmom[0] / lmom[1]
             scale = lmom[0] * ( itau - 1 )
             scale = scale if scale > 0 else 1e-8
             shape = 2 - itau
+            ## Tail with less than 2 values, or with ties only (e.g. the zeros of precipitation): degenerate tail at its location
+            if not ( np.isfinite(scale) and np.isfinite(shape) ):
+                scale,shape = 1e-8,0.
             return scale,shape
         
         ## GPD left fit
@@ -716,19 +719,19 @@ class rv_empirical_gpd(rv_empirical):##{{{
     
     @property
     def scalel(self) -> float:
-        return float(self._gpdl.kwds["scale"])
+        return float(self._gpdl._rvSC.kwds["scale"])
     
     @property
     def scaler(self) -> float:
-        return float(self._gpdr.kwds["scale"])
+        return float(self._gpdr._rvSC.kwds["scale"])
     
     @property
     def shapel(self) -> float:
-        return float(self._gpdl.kwds["c"])
+        return float(self._gpdl._rvSC.kwds["c"])
     
     @property
     def shaper(self) -> float:
-        return float(self._gpdr.kwds["c"])
+        return float(self._gpdr._rvSC.kwds["c"])
     
     ##}}}
     
