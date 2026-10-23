@@ -163,8 +163,8 @@ class Univariate_QM(UnivariateBC):##{{{
             cdfX0 = rvX0.cdf
         eps  = np.sqrt(np.finfo(X0.dtype).resolution)
         cdf  = cdfX0(X0)
-        cdfx = max( 1 - ( 1 - cdf[cdf < 1].max() / 10 ) , 1 - eps )
-        cdfn = min(           cdf[cdf > 0].min() / 10   ,     eps )
+        cdfx = max( 1 - ( 1 - cdf[cdf < 1].max( initial = 0 ) / 10 ) , 1 - eps )
+        cdfn = min(           cdf[cdf > 0].min( initial = 1 ) / 10   ,     eps )
         cdf = np.where( cdf < 1 , cdf , cdfx )
         cdf = np.where( cdf > 0 , cdf , cdfn )
         

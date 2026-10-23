@@ -106,7 +106,8 @@ class SSR(PrePostProcessingPerCols): ##{{{
         if self._Xn is not None:
             Xn[:] = self._Xn
         
-        if self.Xn is not None:
+        ## The threshold is (re-)infered from Y0 at each fit
+        if self.Xn is not None and not self._kind == "Y0":
             Xn = self.Xn
         
         Xt = X.copy()
