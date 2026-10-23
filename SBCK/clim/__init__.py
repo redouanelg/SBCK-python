@@ -34,8 +34,16 @@ from .__stats import cadescribe
 ## Import only if zxarray is available
 import importlib.util
 if importlib.util.find_spec("zxarray"):
+    ## zxarray calls logging.captureWarnings(True) at import, so the warnings of
+    ## the whole program are dropped unless logging is configured: undo it,
+    ## unless the warnings were already captured before
+    import logging as _logging
+    import warnings as _warnings
+    _showwarning = _warnings.showwarning
     from .__zapply_bcm import zapply_bcm
     from .__zapply_bcm import zapply_bcm_along_time
     from .__zstats import zcorr
     from .__zstats import zcacorrelogram
     from .__zstats import zcadescribe
+    if _warnings.showwarning is not _showwarning:
+        _logging.captureWarnings(False)
