@@ -83,7 +83,8 @@ class Univariate_CDFt(UnivariateBC):##{{{
     Correct the tails of the corrections. Available methods are:
     - 'None': no change,
     - 'CCN': Apply the delta change of the mean of the N last valids values to
-      the tail. N can be replaced by the value of N, default is 5.
+      the tail. N can be replaced by the value of N, default is 5. The tail
+      goes to the end of the law of X1, and does not cross the estimated part.
     - 'Y0': Copy the tail of the reference.
     - 'Y0CC': Copy a scaled tail of Y0, such that the change between the tail
       of Y0 and Z1 is the change between X0 and X1.
@@ -437,17 +438,17 @@ class Univariate_CDFt(UnivariateBC):##{{{
 
         ## Correct the left tail
         if p[0] > self._oob_pmin:
-            pL = np.linspace( self._oob_pmin, p[0], 1000 )
+            pL = np.linspace( 0 , p[0] , 1000 )
             dL = ( q[:CCN] - rvNX1.icdf(p[:CCN]) ).mean()
-            qL = rvNX1.icdf(pL) + dL
+            qL = np.minimum( rvNX1.icdf(pL) + dL , q[0] )
             q = np.hstack((qL,q))
             p = np.hstack((pL,p))
         
         ## Correct the right tail
         if p[-1] < self._oob_pmax:
-            pR = np.linspace( p[-1], self._oob_pmax, 1000 )
+            pR = np.linspace( p[-1] , 1 , 1000 )
             dR = ( q[-CCN:] - rvNX1.icdf(p[-CCN:]) ).mean()
-            qR = rvNX1.icdf(pR) + dR
+            qR = np.maximum( rvNX1.icdf(pR) + dR , q[-1] )
             q = np.hstack((q,qR))
             p = np.hstack((p,pR))
         
