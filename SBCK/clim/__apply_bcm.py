@@ -265,6 +265,12 @@ def apply_bcm( Y0: xr.DataArray, X0: xr.DataArray, X1: xr.DataArray,
             raise ValueError(f"Dimension '{d}' of multivariate_dims is not in Y0, X0 and X1")
     if time_dim in multivariate_dims:
         raise ValueError("Time dimension '{time_dim}' can not be in multivariate_dims argument")
+    
+    ## Dask-backed inputs are loaded in memory: the outputs are filled with
+    ## .loc, which is not possible with dask arrays
+    Y0 = Y0.compute()
+    X0 = X0.compute()
+    X1 = X1.compute()
 
     ## Create output
     Z1 = X1.copy() + np.nan
@@ -485,7 +491,7 @@ def apply_bcm_along_time( Y: xr.DataArray, X: xr.DataArray,
         for w in projection_window:
             if not isinstance( w , int ):
                 raise ValueError
-        wl,wm,wr = projection_window
+        pwl,pwm,pwr = projection_window
     except Exception as e:
         raise ValueError(f"Incoherent projection_window '{projection_window}' {e}")
     
@@ -529,6 +535,11 @@ def apply_bcm_along_time( Y: xr.DataArray, X: xr.DataArray,
             raise ValueError(f"Dimension '{d}' of multivariate_dims is not in X")
     if time_dim in multivariate_dims:
         raise ValueError("Time dimension '{time_dim}' can not be in multivariate_dims argument")
+    
+    ## Dask-backed inputs are loaded in memory: the output is filled with .loc,
+    ## which is not possible with dask arrays
+    Y = Y.compute()
+    X = X.compute()
 
     ## Create output
     Z = X.copy() + np.nan
@@ -581,7 +592,7 @@ def apply_bcm_along_time( Y: xr.DataArray, X: xr.DataArray,
             continue
         
         ## Loop on years
-        for tf0,tp0,tp1,tf1 in yearly_window( prj0 , prj1 , wl , wm , wr , bleft , bright ):
+        for tf0,tp0,tp1,tf1 in yearly_window( prj0 , prj1 , pwl , pwm , pwr , bleft , bright ):
             
             ## Sub-time axis for the projection period
             _timeX1fs = timeX1fs.sel( { time_dim : slice(str(tf0),str(tf1)) } ).sortby(time_dim)

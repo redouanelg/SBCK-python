@@ -21,12 +21,15 @@
 ## Libraries ##
 ###############
 
+import functools
 import itertools as itt
 import logging
 
 import numpy as np
 import xarray as xr
 import zxarray as zr
+import distributed
+import psutil
 
 from ..__AbstractBC import AbstractBC
 from .__tools import yearly_window
@@ -57,8 +60,58 @@ logger.addHandler(logging.NullHandler())
 ## Functions ##
 ###############
 
+def _zclient( kwargs: dict[str,Any] ) -> distributed.Client | None:##{{{
+    """If no client / cluster is given, zxarray.apply_ufunc starts and closes
+    a new dask LocalCluster at each call, and some threads of each cluster are
+    never released (a long run ends with "can't start new thread"). This
+    function starts the same cluster once, to be shared by all the calls of a
+    zapply_bcm* function. Returns None if a client or a cluster is given.
+    """
+    if kwargs.get("client") is not None or kwargs.get("cluster") is not None:
+        return None
+    
+    ## Same parameters as zxarray.apply_ufunc
+    n_workers = kwargs.get("n_workers",1)
+    memory_per_worker = kwargs.get("memory_per_worker")
+    if memory_per_worker is None:
+        total_memory = kwargs.get("total_memory")
+        if total_memory is None:
+            total_memory = zr.DMUnit( n = int( 0.8 * psutil.virtual_memory().total ) , unit = 'B' )
+        memory_per_worker = zr.DMUnit(total_memory) // n_workers
+    memory_per_worker = zr.DMUnit(memory_per_worker)
+    cluster = distributed.LocalCluster( n_workers = n_workers , threads_per_worker = kwargs.get("threads_per_worker",1) , memory_limit = f"{memory_per_worker.B}B" , processes = False )
+    
+    return distributed.Client(cluster)
+##}}}
+
+def _zclose( client: distributed.Client | None ) -> None:##{{{
+    """Close a client started by _zclient"""
+    if client is not None:
+        cluster = client.cluster
+        client.close()
+        cluster.close()
+##}}}
+
+def _with_zclient( f ):##{{{
+    """Decorator of the zapply_bcm* functions: the cluster started by _zclient
+    is passed as client to all the calls of zxarray.apply_ufunc in f, and
+    closed when f returns or raises an exception
+    """
+    @functools.wraps(f)
+    def wrapper( *args , **kwargs ):
+        client = _zclient(kwargs)
+        if client is not None:
+            kwargs = { **kwargs , "client" : client }
+        try:
+            return f( *args , **kwargs )
+        finally:
+            _zclose(client)
+    return wrapper
+##}}}
+
 ## zapply_bcm ##{{{
 
+@_with_zclient
 def zapply_bcm( Y0: zr.ZXArray, X0: zr.ZXArray, X1: zr.ZXArray,
               bc_method: AbstractBC,
               time_dim: str = "time",
@@ -270,6 +323,7 @@ def zapply_bcm( Y0: zr.ZXArray, X0: zr.ZXArray, X1: zr.ZXArray,
 
 ## zapply_bcm_along_time ##{{{
 
+@_with_zclient
 def zapply_bcm_along_time( Y: zr.ZXArray, X: zr.ZXArray,
               bc_method: AbstractBC,
               calibration_period: tuple[str | int,str | int],
@@ -372,7 +426,7 @@ def zapply_bcm_along_time( Y: zr.ZXArray, X: zr.ZXArray,
         for w in projection_window:
             if not isinstance( w , int ):
                 raise ValueError
-        wl,wm,wr = projection_window
+        pwl,pwm,pwr = projection_window
     except Exception as e:
         raise ValueError(f"Incoherent projection_window '{projection_window}' {e}")
     
@@ -481,7 +535,7 @@ def zapply_bcm_along_time( Y: zr.ZXArray, X: zr.ZXArray,
             continue
 
         ## Loop on years
-        for tf0,tp0,tp1,tf1 in yearly_window( prj0 , prj1 , wl , wm , wr , bleft , bright ):
+        for tf0,tp0,tp1,tf1 in yearly_window( prj0 , prj1 , pwl , pwm , pwr , bleft , bright ):
             
             ## Sub-time axis for the projection period
             _timeX1fs = timeX1fs.sel( { time_dim : slice(str(tf0),str(tf1)) } ).sortby(time_dim)

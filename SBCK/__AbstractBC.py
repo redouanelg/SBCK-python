@@ -344,6 +344,8 @@ class MultiUBC(AbstractBC):##{{{
         self.ubcm        = []
         self.ubcm_args   = margs
         self.ubcm_kwargs = mkwargs
+        self._ubcm_args_given   = margs
+        self._ubcm_kwargs_given = mkwargs
     ##}}}
     
     def _check_ubcm_args_kwargs( self , *args: Any ) -> None:##{{{
@@ -390,10 +392,14 @@ class MultiUBC(AbstractBC):##{{{
             Any numbers of array passed for fit
          """
         
-        ## Check kw-args of input
+        ## Check kw-args of input (start from the arguments given in __init__,
+        ## the number of dimensions can change between two fits)
+        self.ubcm_args   = self._ubcm_args_given
+        self.ubcm_kwargs = self._ubcm_kwargs_given
         self._check_ubcm_args_kwargs(*args)
         
-        ## Loop of fit
+        ## Loop of fit (the margins of a previous fit are removed)
+        self.ubcm = []
         for i in range(self.ndim):
             self.ubcm.append( self.ubcm_class( *self.ubcm_args[i] , **self.ubcm_kwargs[i] ).fit( *[X[:,i] for X in args] , **kwargs ) )
         

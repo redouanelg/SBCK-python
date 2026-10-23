@@ -71,8 +71,8 @@ class SchaakeShuffle:##{{{
         X0 = X0.squeeze()
         Y0 = Y0.squeeze()
         
-        rank_X0 = sp.stats.rankdata( X0 , method = "ordinal" )
-        rank_Y0 = sp.stats.rankdata( Y0 , method = "ordinal" )
+        rank_X0 = sp.stats.rankdata( X0 , method = "ordinal" ).astype(int)
+        rank_Y0 = sp.stats.rankdata( Y0 , method = "ordinal" ).astype(int)
         
         arank_X0 = np.argsort(rank_X0)
         Z0 = X0[arank_X0][rank_Y0-1]
@@ -191,8 +191,8 @@ class SchaakeShuffleRef(SchaakeShuffle):##{{{
         if X0.ndim == 1: X0 = X0.reshape(-1,1)
         Z0 = SchaakeShuffle.predict( self , X0 )
         
-        rank_ref_X0  = sp.stats.rankdata( X0[:,self._ref] , method = "ordinal" )
-        rank_ref_Z0  = sp.stats.rankdata( Z0[:,self._ref] , method = "ordinal" )
+        rank_ref_X0  = sp.stats.rankdata( X0[:,self._ref] , method = "ordinal" ).astype(int)
+        rank_ref_Z0  = sp.stats.rankdata( Z0[:,self._ref] , method = "ordinal" ).astype(int)
         arank_ref_Z0 = np.argsort(rank_ref_Z0)
         Z0 = Z0[arank_ref_Z0,:][rank_ref_X0-1,:]
         
@@ -373,7 +373,7 @@ class MVRanksShuffle: ##{{{
         tiY = (n_samplesY - 1 - sp.linalg.toeplitz(range(n_samplesY)))[::-1,:][:self.lag_search,:(n_samplesY-self.lag_search+1)]
         
         ## Find quantiles (i.e. ranks)
-        self.qY = sp.stats.rankdata( Y , axis = 0 , method = "ordinal" )
+        self.qY = sp.stats.rankdata( Y , axis = 0 , method = "ordinal" ).astype(int)
         
         ## Build conditionning block search
         qYc = self.qY[:,self.col_cond]
@@ -403,7 +403,7 @@ class MVRanksShuffle: ##{{{
         tiX  = (n_samplesX - 1 - sp.linalg.toeplitz(range(n_samplesX)))[::-1,:][:self.lag_search,:(n_samplesX-self.lag_search+1)]
         
         ## Find quantiles (i.e. ranks)
-        qX = sp.stats.rankdata( X , axis = 0 , method = "ordinal" )
+        qX = sp.stats.rankdata( X , axis = 0 , method = "ordinal" ).astype(int)
         
         ## Shrink
         qY = self.qY
