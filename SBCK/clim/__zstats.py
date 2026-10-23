@@ -41,7 +41,6 @@ from typing import Sequence, Any
 ## Init logging ##
 ##################
 
-logging.captureWarnings(True)
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
