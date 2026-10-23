@@ -20,6 +20,7 @@
 ## Libraries ##
 ###############
 
+import warnings
 import numpy as np
 from .__PrePostProcessing import PrePostProcessingPerCols
 from ..misc.__sys import deprecated
@@ -57,7 +58,8 @@ class LimitTailsRatio(PrePostProcessingPerCols):##{{{
     'LimitTailsRatio.bound_inside_right' and 'LimitTailsRatio.bound_inside_left'.
     
     For precipitation, use tails = "right", with SBCK.ppp.SSR in the pipe of
-    this class.
+    this class. NaN values of the projection period are ignored by the
+    quantiles and the max (min), and stay NaN.
     
     """
     
@@ -142,10 +144,13 @@ class LimitTailsRatio(PrePostProcessingPerCols):##{{{
             self._qlX0 = np.quantile( X , self._p_l , axis = 0 )
             self._stdX0 = np.std( X , axis = 0 )
         if self._kind == "X1":
-            self._qrX1 = np.quantile( X , self._p_r , axis = 0 )
-            self._qcX1 = np.quantile( X , self._p_c , axis = 0 )
-            self._qlX1 = np.quantile( X , self._p_l , axis = 0 )
-            self._stdX1 = np.std( X , axis = 0 )
+            ## NaN values to correct are ignored (a column of NaN only gives NaN)
+            with warnings.catch_warnings():
+                warnings.simplefilter( "ignore" , RuntimeWarning )
+                self._qrX1 = np.nanquantile( X , self._p_r , axis = 0 )
+                self._qcX1 = np.nanquantile( X , self._p_c , axis = 0 )
+                self._qlX1 = np.nanquantile( X , self._p_l , axis = 0 )
+                self._stdX1 = np.nanstd( X , axis = 0 )
         
         return X
     ##}}}
@@ -167,9 +172,11 @@ class LimitTailsRatio(PrePostProcessingPerCols):##{{{
             if self._tails in ["right","both"]:
                 SR  = (self._qrX1 - self._qcX1) / (self._qrX0 - self._qcX0)
                 SR  = np.where( SR > self._ratio , self._ratio , SR ) * ( self._maxY0 - self._qcY0 ) + self._qcY0 + (self._qcX1 - self._qcX0) * ratio
-                MR  = Xt.max( axis = 0 )
-                QR  = np.quantile( Xt , self._p_r , axis = 0 )
-                inside["right"] = ~(MR < SR) & ~(QR < SR) & cols
+                with warnings.catch_warnings():
+                    warnings.simplefilter( "ignore" , RuntimeWarning )
+                    MR = np.nanmax( Xt , axis = 0 )
+                    QR = np.nanquantile( Xt , self._p_r , axis = 0 )
+                inside["right"] = ~(MR < SR) & ~(QR < SR) & ~np.isnan(MR) & cols
                 with np.errstate( divide = "ignore" , invalid = "ignore" ):
                     Xt = np.where( (MR < SR) | ~(QR < SR) | (Xt < QR) , Xt , (Xt - QR) / (MR - QR) * (SR - QR) + QR )
                 X[:,self.cols] = Xt[:,self.cols]
@@ -178,9 +185,11 @@ class LimitTailsRatio(PrePostProcessingPerCols):##{{{
             if self._tails in ["left","both"]:
                 SL  = (self._qcX1 - self._qlX1) / (self._qcX0 - self._qlX0)
                 SL  = np.where( SL > self._ratio , self._ratio , SL ) * ( self._minY0 - self._qcY0) + self._qcY0 + (self._qcX1 - self._qcX0) * ratio
-                ML  = Xt.min( axis = 0 )
-                QL  = np.quantile( Xt , self._p_l , axis = 0 )
-                inside["left"] = ~(ML > SL) & ~(QL > SL) & cols
+                with warnings.catch_warnings():
+                    warnings.simplefilter( "ignore" , RuntimeWarning )
+                    ML = np.nanmin( Xt , axis = 0 )
+                    QL = np.nanquantile( Xt , self._p_l , axis = 0 )
+                inside["left"] = ~(ML > SL) & ~(QL > SL) & ~np.isnan(ML) & cols
                 with np.errstate( divide = "ignore" , invalid = "ignore" ):
                     Xt = np.where( (ML > SL) | ~(QL > SL) | (Xt > QL) , Xt , (Xt - QL) / (ML - QL) * (SL - QL) + QL )
                 X[:,self.cols] = Xt[:,self.cols]
