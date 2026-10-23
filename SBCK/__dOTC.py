@@ -427,6 +427,8 @@ class Univariate_dOTC1d(UnivariateBC):##{{{
         
         ## cfactor
         if self._cfactor is None:
+            if not X0.std() > 0:
+                raise ValueError( "dOTC1d: X0 is constant, the factor Y0.std() / X0.std() is not defined" )
             self._cfactor  = Y0.std() / X0.std()
         
         ## Inference of Y1
