@@ -509,7 +509,7 @@ class rv_empirical_ratio(rv_empirical):##{{{
         p = np.zeros_like(x) + np.nan
         idxp = x > 0
         idxn = x < 0
-        idx0 = ~idxp & ~idxn
+        idx0 = x == 0
         p[idxp] = (1-self.p0) * super()._cdf( x[idxp] ) + self.p0
         p[idx0] = self.p0
         p[idxn] = 0
@@ -520,7 +520,7 @@ class rv_empirical_ratio(rv_empirical):##{{{
         
         x    = np.zeros_like(p) + np.nan
         idxp = p > self.p0
-        idx0 = ~idxp
+        idx0 = p <= self.p0
         x[idxp] = super()._icdf( (p[idxp] - self.p0) / (1-self.p0) )
         x[idx0] = 0
         return x
