@@ -314,6 +314,15 @@ class Test_ClimWindows(unittest.TestCase):##{{{
             distributed.default_client()
 ##}}}
 
+class Test_Warnings(unittest.TestCase):##{{{
+    """Importing SBCK (and zxarray through SBCK.clim) does not drop the warnings of the program"""
+    
+    def test_warning_shown(self):
+        code = "import SBCK, SBCK.clim, warnings; warnings.warn('climatsuds-probe-warning')"
+        r    = subprocess.run( [sys.executable,"-c",code] , capture_output = True , text = True )
+        self.assertIn( "climatsuds-probe-warning" , r.stderr )
+##}}}
+
 class Test_Ranks(unittest.TestCase):##{{{
     """Rank shuffles with SciPy >= 1.18 (rankdata returns float ranks)"""
 
