@@ -134,6 +134,20 @@ class Test_LimitTailsRatio(unittest.TestCase):##{{{
         self.assertEqual( Z[Z1.argmin()] , Z.min() )
         self.assertTrue( ltr.flags["LimitTailsRatio.bound_inside_left"][0] )
         self.assertFalse( ltr.flags["LimitTailsRatio.bound_inside_right"][0] )
+    
+    def test_nan_ignored(self):
+        rng      = np.random.default_rng(8)
+        Y0,X0,X1 = rng.normal( 0 , 1 , (300,1) ),rng.normal( 1 , 2 , (300,1) ),rng.normal( 2 , 2 , (250,1) )
+        nan      = np.zeros( X1.shape , bool )
+        nan[[4,90,200],0] = True
+        keep     = ~nan[:,0]
+        ltr      = bcp.LimitTailsRatio( bc_method = bc.CDFt ).fit( Y0 , X0 , X1 )
+        Zn       = np.asarray( ltr.predict( np.where( nan , np.nan , X1 ) ) )
+        fn       = { k : list(v) for k,v in ltr.flags.items() }
+        Zr       = np.asarray( ltr.predict( X1[keep] ) )
+        np.testing.assert_array_equal( np.isnan(Zn) , nan )
+        np.testing.assert_array_equal( Zn[keep] , Zr )
+        self.assertEqual( fn , { k : list(v) for k,v in ltr.flags.items() } )
 ##}}}
 
 class Test_QM(unittest.TestCase):##{{{
@@ -258,6 +272,16 @@ class Test_CDFt_laws(unittest.TestCase):##{{{
         Z0 = bc.CDFt( oob = "Y0" , **kw ).fit( Y0 , X0 , X1 ).ubcm[0]._predictZ0(X0)
         self.assertTrue( np.isfinite(Z0).all() )
 
+    def test_cc_tails(self):
+        rng   = np.random.default_rng(0)
+        Y0,X0 = rng.normal( 0 , 2 , 3000 ),rng.normal( 0 , 1 , 3000 )
+        X1    = rng.normal( 0 , 1 , 3000 )
+        for oob in ["CC","CC10"]:
+            Z = np.asarray( bc.CDFt( norm = "None" , oob = oob ).fit( Y0 , X0 , X1 ).predict(X1) ).ravel()
+            self.assertEqual( int( (Z == Z.max()).sum() ) , 1 )
+            self.assertEqual( int( (Z == Z.min()).sum() ) , 1 )
+            self.assertTrue( np.all( np.diff( Z[np.argsort( X1 , kind = "stable" )] ) >= 0 ) )
+    
     def test_gpd_tail_with_ties(self):
         rng = np.random.default_rng(0)
         rv  = bcs.rv_empirical_gpd.fit( _pr( rng , 360 , 0.5 , 0.8 , 6 ) )
