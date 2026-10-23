@@ -86,13 +86,20 @@ class PreserveOrder(PrePostProcessing):##{{{
     ##}}}
     
     def itransform( self , Xt: _Array ) -> _Array:##{{{
-        """Apply the inverse PreserveOrder transform, i.e. sort along cols"""
+        """Apply the inverse PreserveOrder transform, i.e. sort along cols;
+        in a row with NaN, the NaN stay in place and the other values are sorted"""
         
-        if self._cols is None:
+        if self.cols_order is None:
             return Xt
         
-        X = Xt.copy()
-        X[:,self.cols_order] = np.sort( X[:,self.cols_order] , axis = 1 )
+        X  = Xt.copy()
+        Xo = X[:,self.cols_order]
+        ok = ~np.isnan(Xo).any( axis = 1 )
+        Xo[ok,:] = np.sort( Xo[ok,:] , axis = 1 )
+        for i in np.flatnonzero(~ok):
+            fin = ~np.isnan(Xo[i,:])
+            Xo[i,fin] = np.sort( Xo[i,fin] )
+        X[:,self.cols_order] = Xo
         
         return X
     ##}}}

@@ -44,7 +44,8 @@ class SSR(PrePostProcessingPerCols): ##{{{
     inverse transform replace all values lower than the threshold by 0. The
     threshold used for inverse transform is given by the keyword `isaved`, which
     takes the value `Y0` (reference in calibration period), or `X0` (biased in
-    calibration period), or `X1` (biased in projection period)
+    calibration period), or `X1` (biased in projection period). NaN values
+    are kept by both transforms.
     
     Note that SSR is generally incompatible with the SBCK.dOTC method.
     
@@ -112,9 +113,9 @@ class SSR(PrePostProcessingPerCols): ##{{{
         
         Xt = X.copy()
         if self._method == "runiform":
-            Xt[:,cols] = np.where( (X[:,cols] > Xn).reshape(-1,ncols) , X[:,cols].reshape(-1,ncols) , np.random.uniform( low = Xn / 100 , high = Xn , size = (X.shape[0],ncols) ) )
+            Xt[:,cols] = np.where( ( (X[:,cols] > Xn) | np.isnan(X[:,cols]) ).reshape(-1,ncols) , X[:,cols].reshape(-1,ncols) , np.random.uniform( low = Xn / 100 , high = Xn , size = (X.shape[0],ncols) ) )
         else:
-            Xt[:,cols] = np.where( (X[:,cols] > Xn).reshape(-1,ncols) , X[:,cols].reshape(-1,ncols) , np.hstack( [np.linspace( Xn[0,i] / 100 , Xn[0,i] , X.shape[0] ).reshape(-1,1) for i in range(ncols) ] ) )
+            Xt[:,cols] = np.where( ( (X[:,cols] > Xn) | np.isnan(X[:,cols]) ).reshape(-1,ncols) , X[:,cols].reshape(-1,ncols) , np.hstack( [np.linspace( Xn[0,i] / 100 , Xn[0,i] , X.shape[0] ).reshape(-1,1) for i in range(ncols) ] ) )
         
         if self._kind == "Y0":
             self.Xn = Xn
@@ -130,7 +131,7 @@ class SSR(PrePostProcessingPerCols): ##{{{
         X = Xt.copy()
         if X.ndim == 1:
             X = X.reshape(-1,1)
-        X[:,self.cols] = np.where( Xt[:,self.cols] > self.Xn , Xt[:,self.cols] , 0 )
+        X[:,self.cols] = np.where( (Xt[:,self.cols] > self.Xn) | np.isnan(Xt[:,self.cols]) , Xt[:,self.cols] , 0 )
         
         return X
         ##}}}

@@ -359,8 +359,8 @@ class LFLogistic(LinkFunction):##{{{
     
     def _transform( self , x: _Array ) -> _Array:
         xt  = x.copy()
-        xt  = np.where( xt < self.ymax - self._tol , xt , self.ymax - self._tol )
-        xt  = np.where( xt > self.ymin + self._tol , xt , self.ymin + self._tol )
+        xt  = np.where( (xt < self.ymax - self._tol) | np.isnan(xt) , xt , self.ymax - self._tol )
+        xt  = np.where( (xt > self.ymin + self._tol) | np.isnan(xt) , xt , self.ymin + self._tol )
         y   = - np.log( (self.ymax - self.ymin) / (xt - self.ymin) - 1 ) / self.s
         ivl = (x < self.ymin) | (x > self.ymax)
         y[ivl] = np.nan
@@ -369,8 +369,8 @@ class LFLogistic(LinkFunction):##{{{
     def _itransform( self , y: _Array ) -> _Array:
         x = y.copy()
         x = (self.ymax - self.ymin) / ( 1 + np.exp(-self.s*x) ) + self.ymin
-        x = np.where( x < self.ymax - self._tol , x , self.ymax )
-        x = np.where( x > self.ymin + self._tol , x , self.ymin )
+        x = np.where( (x < self.ymax - self._tol) | np.isnan(x) , x , self.ymax )
+        x = np.where( (x > self.ymin + self._tol) | np.isnan(x) , x , self.ymin )
         return x
     
 ##}}}
