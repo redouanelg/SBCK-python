@@ -33,6 +33,9 @@ from .__tools import yearly_window
 from .__apply_bcm import group2time
 from .__apply_bcm import _apply_bcm
 from .__apply_bcm import _apply_bcm_along_time
+from .__apply_bcm import _flag_names
+from .__apply_bcm import _flags_collect
+from .__apply_bcm import _flags_table
 
 
 ############
@@ -64,11 +67,21 @@ def zapply_bcm( Y0: zr.ZXArray, X0: zr.ZXArray, X1: zr.ZXArray,
               multivariate_dims: Sequence | str = tuple(),
               chunks: dict[str,int | str] | None = None,
               bc_method_kwargs: dict[str,Any] = {},
+              return_flags: bool = False,
               **kwargs: dict[str,Any]
-              ) -> zr.ZXArray:
+              ) -> tuple[zr.ZXArray,...]:
     """Function for correcting `X0` and `X1` biased data with the `Y0`
     reference. The `bcm` method is used, and must be a non-stationary method.
     The firs dimension must be the time axis.
+
+    If the method sets diagnostic flags (attributes `flag_names` / `flags`,
+    e.g. SBCK.ppp.LimitTailsRatio), they are read for each cell and group:
+    the number of flagged cells is logged (warning, SBCK.clim logger, visible
+    if logging is configured) for each group, and, with `return_flags = True`,
+    the flagged entries are returned after Z0 as a pandas.DataFrame, one row per
+    flagged cell (and column of the multivariate dimensions): coordinates of
+    the cell, 'group' (index from 1: the month for seas_cycle = "month")
+    and 'flag'. F is None if the method sets no flag.
     
     Arguments
     ---------
@@ -108,6 +121,8 @@ def zapply_bcm( Y0: zr.ZXArray, X0: zr.ZXArray, X1: zr.ZXArray,
         Corrected data in projection period
     Z0: zxarray.ZXArray
         Corrected data in calibration period
+    F: pandas.DataFrame | None
+        Only if return_flags: flagged entries
     """
     ## Check if time axis is in dimensions of Y and X
     if time_dim not in Y0.dims:
@@ -181,10 +196,23 @@ def zapply_bcm( Y0: zr.ZXArray, X0: zr.ZXArray, X1: zr.ZXArray,
     
     ## Find block dims
     block_dims = [d for d in Y0.dims if d not in (time_dim,) + multivariate_dims]
+    
+    ## Diagnostic flags of the method
+    flag_names = _flag_names( bc_method( **bc_method_kwargs ) )
+    dask_kwargs["kwargs"]["flag_names"] = flag_names
+    fout = { "output_dims": [] , "output_coords": [] , "output_dtypes": [] }
+    if len(flag_names) > 0:
+        dask_kwargs["output_core_dims"] = output_core_dims + [("flag",) + multivariate_dims]
+        dask_kwargs["output_dtypes"]    = [X1.dtype,X0.dtype,np.int8]
+        dask_kwargs["dask_gufunc_kwargs"] = { "output_sizes": { "flag": len(flag_names) } }
+        ## float32: zxarray initialises its outputs with NaN, so int8 is not possible here (cast to int8 when stored)
+        fout = { "output_dims": [ tuple(block_dims) + ("flag",) + multivariate_dims ] , "output_dtypes": ["float32"] ,
+                 "output_coords": [ { **{ d: X1[d] for d in block_dims } , "flag": np.array(flag_names) , **{ d: X1[d] for d in multivariate_dims } } ] }
 
     ## Loop on groups
     _fmt  = '0>{}'.format( int(np.log10(len(groupsY))+1) )
     _ngrp = len(groupsY)
+    F     = None if len(flag_names) == 0 else []
     for igrps,(grpsXf,grpsXp,grpsY) in enumerate(zip(groupsXf,groupsXp,groupsY)):
         
         logger.info( f"Correction of group {igrps+1:{_fmt}} / {_ngrp}" )
@@ -204,18 +232,24 @@ def zapply_bcm( Y0: zr.ZXArray, X0: zr.ZXArray, X1: zr.ZXArray,
         X1ps = X1.zsel( **{ time_dim: timeX1ps } , drop = False ).rename( { time_dim: f"{time_dim}X1p" } )
         
         ## Correction
-        Z1s,Z0s = zr.apply_ufunc( _apply_bcm, Y0s, X0fs, X1fs, X0ps, X1ps,
+        out = zr.apply_ufunc( _apply_bcm, Y0s, X0fs, X1fs, X0ps, X1ps,
                               block_dims = block_dims,
-                              output_dims = [X1ps.dims,X0ps.dims],
-                              output_coords = [ {d: X1ps[d] for d in X1ps.dims}, {d: X0ps[d] for d in X0ps.dims}],
-                              output_dtypes = [X1ps.dtype,X0ps.dtype],
+                              output_dims = [X1ps.dims,X0ps.dims] + fout["output_dims"],
+                              output_coords = [ {d: X1ps[d] for d in X1ps.dims}, {d: X0ps[d] for d in X0ps.dims}] + fout["output_coords"],
+                              output_dtypes = [X1ps.dtype,X0ps.dtype] + fout["output_dtypes"],
                               dask_kwargs = dask_kwargs,
                               **kwargs
         )
+        Z1s,Z0s = out[0],out[1]
+        F1s     = out[2].dataarray if len(flag_names) > 0 else None
+        del out
         
         ## Store correction
         Z1.zloc[*tuple([timeX1ps.values] + [slice(None) for _ in range(Z1.ndim - 1)])] = Z1s
         Z0.zloc[*tuple([timeX0ps.values] + [slice(None) for _ in range(Z0.ndim - 1)])] = Z0s
+        if len(flag_names) > 0:
+            F.append( _flags_collect( F1s , flag_names , block_dims , multivariate_dims , { "group": igrps + 1 } , f"group {igrps+1:{_fmt}} / {_ngrp}" ) )
+            del F1s
 
         ## Clean
         del Y0s
@@ -225,7 +259,11 @@ def zapply_bcm( Y0: zr.ZXArray, X0: zr.ZXArray, X1: zr.ZXArray,
         del X1ps
         del Z0s
         del Z1s
-
+    
+    if F is not None:
+        F = _flags_table( F , list(block_dims) + ["group","flag"] + list(multivariate_dims) )
+    if return_flags:
+        return Z1,Z0,F
     return Z1,Z0
 
 ##}}}
@@ -243,11 +281,21 @@ def zapply_bcm_along_time( Y: zr.ZXArray, X: zr.ZXArray,
               multivariate_dims: Sequence | str = tuple(),
               chunks: dict[str,int | str] | None = None,
               bc_method_kwargs: dict[str,Any] = {},
+              return_flags: bool = False,
               **kwargs: dict[str,Any]
-              ) -> zr.ZXArray:
+              ) -> zr.ZXArray | tuple[zr.ZXArray,xr.DataArray | None]:
     """Function for correcting `X` biased data with the `Y` reference. The
     `bcm` method is used, and must be a non-stationary method. The first
     dimension must be the time axis.
+
+    If the method sets diagnostic flags (attributes `flag_names` / `flags`,
+    e.g. SBCK.ppp.LimitTailsRatio), they are read for each cell and group and window:
+    the number of flagged cells is logged (warning, SBCK.clim logger, visible
+    if logging is configured) for each group and window, and, with `return_flags = True`,
+    the flagged entries are returned with the correction as a pandas.DataFrame, one row per
+    flagged cell (and column of the multivariate dimensions): coordinates of
+    the cell, 'group' (index from 1: the month for seas_cycle = "month"), 'window'
+    and 'flag'. F is None if the method sets no flag.
     
     Arguments
     ---------
@@ -291,6 +339,8 @@ def zapply_bcm_along_time( Y: zr.ZXArray, X: zr.ZXArray,
     -------
     Z: zxarray.ZXArray
         Corrected data
+    F: pandas.DataFrame | None
+        Only if return_flags: flagged entries
     """
     ## Check if time axis is in dimensions of Y and X
     if time_dim not in Y.dims:
@@ -394,9 +444,22 @@ def zapply_bcm_along_time( Y: zr.ZXArray, X: zr.ZXArray,
     ## Find block dims
     block_dims = [d for d in Y.dims if d not in (time_dim,) + multivariate_dims]
     
+    ## Diagnostic flags of the method
+    flag_names = _flag_names( bc_method( **bc_method_kwargs ) )
+    dask_kwargs["kwargs"]["flag_names"] = flag_names
+    fout = { "output_dims": [] , "output_coords": [] , "output_dtypes": [] }
+    if len(flag_names) > 0:
+        dask_kwargs["output_core_dims"] = output_core_dims + [("flag",) + multivariate_dims]
+        dask_kwargs["output_dtypes"]    = [X.dtype,np.int8]
+        dask_kwargs["dask_gufunc_kwargs"] = { "output_sizes": { "flag": len(flag_names) } }
+        ## float32: zxarray initialises its outputs with NaN, so int8 is not possible here (cast to int8 when stored)
+        fout = { "output_dims": [ tuple(block_dims) + ("flag",) + multivariate_dims ] , "output_dtypes": ["float32"] ,
+                 "output_coords": [ { **{ d: X[d] for d in block_dims } , "flag": np.array(flag_names) , **{ d: X[d] for d in multivariate_dims } } ] }
+    
     ## Loop on groups
     _fmt  = '0>{}'.format( int(np.log10(len(groupsY))+1) )
     _ngrp = len(groupsY)
+    F     = None if len(flag_names) == 0 else []
     for igrps,(grpsXf,grpsXp,grpsY) in enumerate(zip(groupsXf,groupsXp,groupsY)):
         
         logger.info( f"Correction of group {igrps+1:{_fmt}} / {_ngrp}" )
@@ -437,12 +500,16 @@ def zapply_bcm_along_time( Y: zr.ZXArray, X: zr.ZXArray,
             ## Correction
             Z1ps = zr.apply_ufunc( _apply_bcm_along_time, Y0s, X0s, X1fs, X1ps,
                                   block_dims = block_dims,
-                                  output_dims = [X1ps.dims],
-                                  output_coords = [ {d: X1ps[d] for d in X1ps.dims}],
-                                  output_dtypes = [X1ps.dtype],
+                                  output_dims = [X1ps.dims] + fout["output_dims"],
+                                  output_coords = [ {d: X1ps[d] for d in X1ps.dims}] + fout["output_coords"],
+                                  output_dtypes = [X1ps.dtype] + fout["output_dtypes"],
                                   dask_kwargs = dask_kwargs,
                                   **kwargs
             )
+            if len(flag_names) > 0:
+                Z1ps,F1ps = Z1ps
+                F.append( _flags_collect( F1ps.dataarray , flag_names , block_dims , multivariate_dims , { "group": igrps + 1 , "window": f"{tp0}-{tp1}" } , f"group {igrps+1:{_fmt}} / {_ngrp}, window {tp0}-{tp1}" ) )
+                del F1ps
             
             ## Store correction
             idx = tuple([_timeX1ps.values] + [slice(None) for _ in range(Z.ndim - 1)])
@@ -459,7 +526,11 @@ def zapply_bcm_along_time( Y: zr.ZXArray, X: zr.ZXArray,
     
     ## Final sub-selection
     Z = Z.zsel( **{ time_dim : slice(str(prj0),str(prj1)) } , drop = False )
-
+    
+    if F is not None:
+        F = _flags_table( F , list(block_dims) + ["group","window","flag"] + list(multivariate_dims) )
+    if return_flags:
+        return Z,F
     return Z
 
 ##}}}
