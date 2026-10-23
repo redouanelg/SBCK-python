@@ -50,6 +50,13 @@ class Univariate_QM(UnivariateBC):##{{{
     proposed here is generic, and can use scipy.stats to fit a parametric
     distribution, or can use a frozen distribution.
     
+    Values to correct outside the calibration range are mapped to the extreme
+    quantiles of Y0. Diagnostic flags (`flags`, after predict; one value per
+    column): 'QM.outside_calibration' is set where none of the values to
+    correct is inside the calibration range, i.e. where the law of X0 gives
+    them all a cdf of exactly 0 or 1 (empirical law: at or above max(X0), or
+    below min(X0)).
+    
     Example
     -------
     ```
@@ -104,6 +111,7 @@ class Univariate_QM(UnivariateBC):##{{{
     _freezeY0: bool
     rvY0: rv_base | None
     rvX0: rv_base | None
+    _outside: bool
     
     def __init__( self , rvY0: _rv_type = rv_empirical , rvX0: _rv_type = rv_empirical ) -> None:##{{{
         """
@@ -117,6 +125,7 @@ class Univariate_QM(UnivariateBC):##{{{
         super().__init__( "Univariate_QM" , "S" )
         self._typeY0,self._freezeY0,self.rvY0 = self._init(rvY0)
         self._typeX0,self._freezeX0,self.rvX0 = self._init(rvX0)
+        self._outside = False
     ##}}}
     
     def fit( self , Y0: _NArray , X0: _NArray ) -> Self:##{{{
@@ -163,8 +172,11 @@ class Univariate_QM(UnivariateBC):##{{{
             cdfX0 = rvX0.cdf
         eps  = np.sqrt(np.finfo(X0.dtype).resolution)
         cdf  = cdfX0(X0)
-        cdfx = max( 1 - ( 1 - cdf[cdf < 1].max() / 10 ) , 1 - eps )
-        cdfn = min(           cdf[cdf > 0].min() / 10   ,     eps )
+        
+        ## Diagnostic flag: no value to correct inside the calibration range (cdf exactly 0 or 1)
+        self._outside = bool( cdf.size > 0 and not np.any( ( cdf > 0 ) & ( cdf < 1 ) ) )
+        cdfx = max( 1 - ( 1 - cdf[cdf < 1].max( initial = 0 ) / 10 ) , 1 - eps )
+        cdfn = min(           cdf[cdf > 0].min( initial = 1 ) / 10   ,     eps )
         cdf = np.where( cdf < 1 , cdf , cdfx )
         cdf = np.where( cdf > 0 , cdf , cdfn )
         
@@ -194,6 +206,8 @@ class Univariate_QM(UnivariateBC):##{{{
 class QM(MultiUBC):##{{{
     __doc__ = Univariate_QM.__doc__
     
+    flag_names: tuple[str,...] = ( "QM.outside_calibration" ,)
+    
     def __init__( self , rvY0: _mrv_type = rv_empirical , rvX0: _mrv_type = rv_empirical , **kwargs ) -> None:##{{{
         __doc__ = Univariate_QM.__init__.__doc__
         
@@ -202,6 +216,11 @@ class QM(MultiUBC):##{{{
         kwargs = { **{ 'rvY0' : rvY0 , 'rvX0' : rvX0 } , **kwargs }
         super().__init__( "QM" , Univariate_QM , args = args , kwargs = kwargs )
     ##}}}
+    
+    @property
+    def flags(self) -> dict[str,_Array]:
+        """Diagnostic flags of the last predict, one value per column"""
+        return { "QM.outside_calibration" : np.array( [ ubcm._outside for ubcm in self.ubcm[:self.ndim] ] , dtype = bool ) }
     
 ##}}}
 
