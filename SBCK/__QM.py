@@ -51,7 +51,7 @@ class Univariate_QM(UnivariateBC):##{{{
     distribution, or can use a frozen distribution.
     
     Values to correct outside the calibration range are mapped to the extreme
-    quantiles of Y0. Diagnostic flags (`flags`, after predict; one value per
+    quantiles of Y0, and NaN values stay NaN. Diagnostic flags (`flags`, after predict; one value per
     column): 'QM.outside_calibration' is set where none of the values to
     correct is inside the calibration range, i.e. where the law of X0 gives
     them all a cdf of exactly 0 or 1 (empirical law: at or above max(X0), or
@@ -173,14 +173,23 @@ class Univariate_QM(UnivariateBC):##{{{
         eps  = np.sqrt(np.finfo(X0.dtype).resolution)
         cdf  = cdfX0(X0)
         
+        ## NaN values to correct stay NaN, whatever the cdf gives them
+        nan  = np.isnan(X0)
+        if nan.any():
+            cdf = np.where( nan , np.nan , cdf )
+        
         ## Diagnostic flag: no value to correct inside the calibration range (cdf exactly 0 or 1)
-        self._outside = bool( cdf.size > 0 and not np.any( ( cdf > 0 ) & ( cdf < 1 ) ) )
+        self._outside = bool( np.any( ~nan ) and not np.any( ( cdf > 0 ) & ( cdf < 1 ) ) )
         cdfx = max( 1 - ( 1 - cdf[cdf < 1].max( initial = 0 ) / 10 ) , 1 - eps )
         cdfn = min(           cdf[cdf > 0].min( initial = 1 ) / 10   ,     eps )
         cdf = np.where( cdf < 1 , cdf , cdfx )
         cdf = np.where( cdf > 0 , cdf , cdfn )
         
-        return self.rvY0.icdf(cdf)
+        Z0 = self.rvY0.icdf(cdf)
+        if nan.any():
+            Z0 = np.where( nan , np.nan , Z0 )
+        
+        return Z0
     ##}}}
     
     def _predictZ1( self , X1: _Array , reinfer_X1: bool = False , **kwargs: Any ) -> _Array:##{{{
