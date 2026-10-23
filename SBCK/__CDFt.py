@@ -87,6 +87,10 @@ class Univariate_CDFt(UnivariateBC):##{{{
     - 'Y0': Copy the tail of the reference.
     - 'Y0CC': Copy a scaled tail of Y0, such that the change between the tail
       of Y0 and Z1 is the change between X0 and X1.
+    All methods except 'None' need laws with a bounded support (icdf(0) and
+    icdf(1) finite, as rv_empirical); with an unbounded law (e.g. from
+    scipy.stats, or rv_empirical_gpd), use 'None', otherwise the correction
+    of the projection period raises a ValueError.
     
     References
     ----------
@@ -271,6 +275,7 @@ class Univariate_CDFt(UnivariateBC):##{{{
         ## First estimation of the support
         qmin = min([rv.icdf(0) for rv in [rvY0,rvX0,rvX1]])
         qmax = max([rv.icdf(1) for rv in [rvY0,rvX0,rvX1]])
+        self._unbounded_support = not ( np.isfinite(qmin) and np.isfinite(qmax) )
         dq   = 0.05 * (qmax - qmin)
         nq   = 1000
         q    = np.linspace( qmin - dq , qmax + dq , nq )
@@ -489,6 +494,7 @@ class Univariate_CDFt(UnivariateBC):##{{{
         NY0,NX0,NX1 = self._normalization( Y0 , X0 , X1 )
         
         ## Find rvY1 with Out of Bounds conditions
+        self._unbounded_support = False
         match self.oob:
             case "Y0":
                 self.rvY1 = self._oob_Y0( NY0 , NX0 , NX1 )
@@ -544,6 +550,8 @@ class Univariate_CDFt(UnivariateBC):##{{{
         """
         if X1 is None:
             return None
+        if getattr( self , "_unbounded_support" , False ):
+            raise ValueError( f"CDFt: icdf(0) or icdf(1) of a law is not finite (law with an unbounded support, e.g. from scipy.stats or rv_empirical_gpd), and oob = '{self.oob}' needs a bounded support, so the correction of the projection period would be NaN: use oob = 'None', or laws with a bounded support such as rv_empirical" )
         
         cdfX1 = self.rvX1.cdf
         if reinfer_X1:
